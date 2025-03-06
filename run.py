@@ -182,6 +182,7 @@ def main(args: ArgumentParser):
                 output_dir = os.path.join(args.output_dir, args.patient_id, folder_type)
                 save_overlay_image(overlay_image, index, output_dir)
                 pickle.dump(colored_image_list, open(os.path.join(output_dir, 'colored_image_list.pkl'), 'wb'))
+                
     result_dir = os.path.join(args.output_dir, args.patient_id)
     log("success", f"Process Finished! Check the result in {result_dir}")
 

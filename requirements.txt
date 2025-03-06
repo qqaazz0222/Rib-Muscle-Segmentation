@@ -26,6 +26,7 @@ scikit-image==0.25.2
 scikit-learn==1.6.1
 scipy==1.15.2
 setuptools==75.8.0
+slicerio==1.1.2
 SimpleITK==2.4.1
 sympy==1.13.1
 threadpoolctl==3.5.0
