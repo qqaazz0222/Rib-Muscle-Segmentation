@@ -23,7 +23,7 @@ def init_args():
         args (ArgumentParser): 인자
     """
     parser = ArgumentParser()
-    parser.add_argument('--patient_id', type=str, default="10149710", help='환자 아이디(단일 환자만 분석)')
+    parser.add_argument('--patient_id', type=str, default="10003382", help='환자 아이디(단일 환자만 분석)')
     parser.add_argument('--input_dir', type=str, default='data/input', help='입력(원본데이터) 디렉토리')
     parser.add_argument('--output_dir', type=str, default='data/output', help='출력 디렉토리')
     parser.add_argument('--working_dir', type=str, default='data/working', help='작업 디렉토리')
@@ -181,6 +181,7 @@ def main(args: ArgumentParser):
 
                 output_dir = os.path.join(args.output_dir, args.patient_id, folder_type)
                 save_overlay_image(overlay_image, index, output_dir)
+                pickle.dump(colored_image_list, open(os.path.join(output_dir, 'colored_image_list.pkl'), 'wb'))
     result_dir = os.path.join(args.output_dir, args.patient_id)
     log("success", f"Process Finished! Check the result in {result_dir}")
 

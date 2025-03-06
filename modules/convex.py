@@ -131,7 +131,7 @@ def convex(working_dir: str, body_mask_path: str, common_data: dict):
 
         adjusted_convex_hull_list = []
         
-        for slice_index in range(num_slices):
+        for slice_index in range(min(num_slices, masked_pixel_data.shape[2])):
             log_progress(slice_index + 1, num_slices, "STEP 1: Convex Hull 생성 중...")
             slice_image = body_mask[slice_index] # 512 x 512
             points, convex_hull = get_convex_hull(slice_image)
@@ -142,7 +142,7 @@ def convex(working_dir: str, body_mask_path: str, common_data: dict):
                 adjusted_convex_hull_list.append(None)
         log("success", "STEP 1: Convex Hull 생성이 완료되었습니다.")
         
-        for slice_index in range(num_slices):
+        for slice_index in range(min(num_slices, masked_pixel_data.shape[2])):
             log_progress(slice_index + 1, num_slices, "STEP 2: Convex Hull 시각화 중...")
             masked_image = masked_pixel_data[:, :, slice_index]
             convex_hull = adjusted_convex_hull_list[slice_index]
