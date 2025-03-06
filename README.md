@@ -62,3 +62,33 @@ or
 
 -   명령어로 실행: `bash dist_run.sh`
 -   실행 내역은 `log/{실행 일/시}/{환자 ID}.log` 로 저장됨
+
+## 분석
+
+1. 분석 실행
+
+    ```
+    python analysis.py --patient_id={환자 ID}
+
+    ex) patient_id = 10003382
+    [⇣] Func.INIT_ARGS Start...
+    [✔︎] Func.INIT_ARGS Finish! Run-Time: 0.0003s
+    [⇣] Func.LOAD_PREDICT_RESULT Start...
+    [✔︎] Func.LOAD_PREDICT_RESULT Finish! Run-Time: 0.1150s
+    [⇣] Func.LOAD_NRRD_MUSCLE_ONLY Start...
+    [☞] 처리된 데이터가 존재합니다. 해당 데이터를 불러옵니다. (data/label/10003382/label_image_muscle_only.pkl)
+    [✔︎] Func.LOAD_NRRD_MUSCLE_ONLY Finish! Run-Time: 0.4619s
+    - [100.0%][541/541] Slice 별 IoU 계산 중...
+    [⌗] Summary
+    - Num Slice: 541
+    - Num Inference(in): 541
+    - Num Inference(ex): 511
+    - Num Label: 541
+    - Avg IoU (In): 0.5049907578558225
+    - Avg IoU (Ex): 0.30320939334637964
+    - Avg IoU (Total): 0.40900184842883547
+    [✔︎] Process Finished! Check the result in data/output/10003382/result.xlsx
+
+    ```
+
+2. 분석 결과는 `data/output/{환자 ID}/iou_result.xlsx`로 저장됩니다.

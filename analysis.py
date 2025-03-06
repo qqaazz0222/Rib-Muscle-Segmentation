@@ -227,8 +227,10 @@ def main(args):
     summary["Avg IoU (Total)"] = numpy.mean(iou_total_list)
 
     sheet.append(["", summary["Avg IoU (In)"], summary["Avg IoU (Ex)"], summary["Avg IoU (Total)"]])
-    wb.save(os.path.join(args.output_dir, args.patient_id, "iou_result.xlsx"))
     log_summary(summary)
+    result_path = os.path.join(args.output_dir, args.patient_id, "result.xlsx")
+    wb.save(result_path)
+    log("success", f"Process Finished! Check the result in {result_path}")
 
 if __name__ == '__main__':
     args = init_args()
