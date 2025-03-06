@@ -41,8 +41,20 @@
 
 1. `data/input` 디렉토리에 환자 DICOM 파일 추가
 
-2. `run.py`파일 26번 라인 `default`값 변경
+-   환자 번호가 `12345678`이라면, `data/input/12345678`이 되도록 위치
+-   `data/input/12345678` 안에는 `dicom`파일이 위치
 
+2. 특정 환자만 실행
+
+-   명령어로 실행: `python run.py --patient_id={환자 번호}`
+
+or
+
+-   파일 수정
+    `run.py`파일 26번 라인 `default`값 변경
     `parser.add_argument('--patient_id', type=str, default="{환자 ID}", help='환자 아이디(단일 환자만 분석)')`
 
-3. `python run.py` 명령어로 실행
+3. 모든 환자 실행
+
+-   명령어로 실행: `bash dist_run.sh`
+-   실행 내역은 `log/{실행 일/시}/{환자 ID}.log` 로 저장됨
