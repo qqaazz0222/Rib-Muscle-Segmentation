@@ -1,5 +1,9 @@
 # Rib-Muscle-Segmentation
 
+## 구조
+
+![구조](resource/structure.png)
+
 ## 디렉토리 구조
 
 ```
