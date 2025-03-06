@@ -1,12 +1,11 @@
 import os
 import cv2
-import nrrd
 import numpy
 import pickle
 import slicerio
 from argparse import ArgumentParser
-from matplotlib import pyplot as plt
 from openpyxl import Workbook
+import matplotlib.pyplot as plt
 from utils.directoryHandler import check_processed_data
 from utils.logger import *
 
@@ -23,9 +22,11 @@ def init_args():
     parser.add_argument('--output_dir', type=str, default='data/output', help='출력 디렉토리')
     parser.add_argument('--working_dir', type=str, default='data/working', help='작업 디렉토리')
     parser.add_argument('--label_dir', type=str, default='data/label', help='라벨(정답데이터) 디렉토리')
+    parser.add_argument('--visualized_dir', type=str, default='data/visualized', help='시각화 결고 디렉토리')
+    parser.add_argument('--visualize', type=bool, default=False, help='시각화 여부')
     return parser.parse_args()
 
-@ log_execution_time
+@log_execution_time
 def load_predict_result(output_dir: str, patient_id: str):
     """
     예측 결과를 로드하는 함수
@@ -50,7 +51,7 @@ def load_predict_result(output_dir: str, patient_id: str):
                 predict_data[folder_type].append(image)
     return predict_data
 
-@ log_execution_time
+@log_execution_time
 def load_nrrd_muscle_only(label_dir: str, patient_id: str):
     """
     NRRD 파일에서 Muscle 영역만 추출하는 함수
@@ -172,6 +173,10 @@ def main(args):
     predict_data = load_predict_result(args.output_dir, args.patient_id)
     label_data = load_nrrd_muscle_only(args.label_dir, args.patient_id)
 
+    if args.visualize:
+        visualized_dir = os.path.join(args.visualized_dir, args.patient_id)
+        os.makedirs(visualized_dir, exist_ok=True)
+
     wb = Workbook()
     sheet = wb.active
     sheet.append(["Slice", "IoU (In)", "IoU (Ex)", "IoU (Total)"])
@@ -219,6 +224,40 @@ def main(args):
         
         if flag[0] or flag[1]:
             iou_total_list.append(iou_total)
+
+        if args.visualize:
+            label_image = numpy.array(label_image, dtype=numpy.uint8)
+            reversed_label_image = cv2.cvtColor(label_image, cv2.COLOR_BGR2RGB)
+            plt.figure(figsize=(15, 3))
+            plt.subplot(1, 7, 1)
+            plt.imshow(reversed_label_image)
+            plt.title(f"Slice: {idx}")
+            if flag[0]:
+                plt.subplot(1, 7, 2)
+                plt.imshow(in_image)
+                plt.title("In(Original)")
+                plt.subplot(1, 7, 3)
+                plt.imshow(in_muscle_image)
+                plt.title("In(Muscle Only)")
+                overlap_in = cv2.addWeighted(reversed_label_image.astype(numpy.float32), 0.5, in_muscle_image.astype(numpy.float32), 0.5, 0)
+                plt.subplot(1, 7, 4)
+                plt.imshow(overlap_in)
+                plt.title(f"Overlap (In)")
+            if flag[1]:
+                plt.subplot(1, 7, 5)
+                plt.imshow(ex_image)
+                plt.title("Ex(Original)")
+                plt.subplot(1, 7, 6)
+                plt.imshow(ex_muscle_image)
+                plt.title("Ex(Muscle Only)")
+                overlap_ex = cv2.addWeighted(reversed_label_image.astype(numpy.float32), 0.5, ex_muscle_image.astype(numpy.float32), 0.5, 0)
+                plt.subplot(1, 7, 7)
+                plt.imshow(overlap_ex)
+                plt.title(f"Overlap (Ex)")
+
+            plt.figtext(0.5, 0.01, f"IoU (In): {iou_in}, IoU (Ex): {iou_ex}, IoU (Total): {iou_total}", ha="center", fontsize=12)
+            plt.savefig(os.path.join(visualized_dir, f"{idx}.png"))
+            plt.close()
 
         sheet.append([idx, iou_in, iou_ex, iou_total])
 

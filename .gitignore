@@ -133,6 +133,8 @@ data/output/*
 !data/output/.gitkeep
 data/working/*
 !data/working/.gitkeep
+data/visualized/*
+!data/visualized/.gitkeep
 
 log/*
 !log/.gitkeep
