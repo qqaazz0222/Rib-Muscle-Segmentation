@@ -1,11 +1,11 @@
 import os
-from utils.directoryHandler import check_processed_data
+from utils.directoryHandler import check_checkpoint
 from utils.dicomHandler import get_dicom_files
 from utils.lungmask import generate_lungmask
 from utils.logger import log_execution_time
 
 @log_execution_time
-def preprocess(working_dir: str):
+def create_lung_mask(working_dir: str):
     """
     전처리를 수행하는 함수
 
@@ -28,6 +28,6 @@ def preprocess(working_dir: str):
 
     for folder_type in ['in', 'ex']:
         lungmask_path = os.path.join(working_dir, f"output_HU_{folder_type}.dcm")
-        if not check_processed_data(lungmask_path):
+        if not check_checkpoint(lungmask_path):
             generate_lungmask(working_dir, lungmask_path)
     return metadata

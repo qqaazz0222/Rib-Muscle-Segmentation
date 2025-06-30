@@ -1,21 +1,23 @@
 import os
+import json
 import torch
 import pickle
+import multiprocessing
 from argparse import ArgumentParser
-from model.model import init_model
+from rich.console import Console
+from model.model import init_model, predict
 from modules.classifier import classify
-from modules.preprocess import preprocess
-from modules.convex import convex
-from modules.masking import masking
-from utils.directoryHandler import check_processed_data
+from modules.postprocess import post_processing
+from modules.extractor_optimized import extract, calc_boundary
+from modules.analyzer import load_label, calculate, overlap, counting
+from modules.visualizer import visualize
+from utils.directoryHandler import check_checkpoint
 from utils.dicomHandler import *
 from utils.imageHandler import *
-from utils.logger import *
-
-args = None
+from utils.logger import log, log_execution_time, log_execution_time_with_dist, log_progress, console_banner, console_args
 
 @log_execution_time
-def init_args():
+def init_args(console):
     """
     인자 초기화 함수
 
@@ -23,111 +25,80 @@ def init_args():
         args (ArgumentParser): 인자
     """
     parser = ArgumentParser()
-    parser.add_argument('--patient_id', type=str, default="10003382", help='환자 아이디(단일 환자만 분석)')
+    parser.add_argument('-P', '--patient_id', type=str, default="10003382", help='환자 아이디(단일 환자만 분석)')
+    parser.add_argument('-O', '--overlap', action='store_true', help='근육 오버랩 여부')
+    parser.add_argument('-C', '--calculate', action='store_true', help='IoU 계산 여부')
+    parser.add_argument('-D', '--data_dir', type=str, default='data', help='데이터 디렉토리')
+    parser.add_argument('-V', '--visualize', type=bool, default=False, help='시각화 여부')
+    parser.add_argument('--batch_size', type=int, default=1, help='한번에 분석할 슬라이드 개수')
     parser.add_argument('--input_dir', type=str, default='data/input', help='입력(원본데이터) 디렉토리')
     parser.add_argument('--output_dir', type=str, default='data/output', help='출력 디렉토리')
     parser.add_argument('--working_dir', type=str, default='data/working', help='작업 디렉토리')
     parser.add_argument('--label_dir', type=str, default='data/label', help='라벨(정답데이터) 디렉토리')
     parser.add_argument('--weight', type=str, default='model/checkpoint.pth', help='모델 가중치 파일 경로')
+    parser.add_argument('--threshold', type=float, default=0.9, help='CNN 모델의 확률 임계값')
+    args = parser.parse_args()
+    dict_args = vars(args)
+    console_args(console, dict_args)
     return parser.parse_args()
 
-@log_execution_time
-def load_common_data(working_dir: str):
+def extract_helper(params):
+    idx, working_file, method, working_file_num, category, sn, boundary, visualize_dir = params
+    norm_idx = idx / working_file_num
+    original_image, extracted_muscle_image, metadata = extract(idx, norm_idx, category, sn, method, boundary, working_file, visualize_dir)
+    return working_file, original_image, extracted_muscle_image, metadata
+
+def extract_muscle(working_list: list, pred_list: list, category: str, sn: str, checkpoint_dir: str, visualize_dir: str, batch_size: int = 1):
     """
-    Convex와 Masking에 필요한 데이터를 로드하는 함수
+    근육 추출 함수
 
     Args:
-        working_dir (str): 작업 디렉터리 경로
+        working_list (list): 작업 리스트
+        pred_list (list): 예측된 클래스 리스트
+        category (str): 분류 카테고리
+        sn (str): 시리즈 번호
+        checkpoint_dir (str): 체크포인트 디렉토리
+        visualize_dir (str): 시각화 디렉토리
 
     Returns:
-        tuple: flag, Convex와 Masking에 필요한 데이터
-    """ 
-    if check_processed_data(os.path.join(working_dir, 'common_data.pkl')):
-        common_data = pickle.load(open(os.path.join(working_dir, 'common_data.pkl'), 'rb'))
-        return True, common_data
-    common_data = {
-        'dicom_data': None,
-        'pixel_data': None,
-        'body_mask_data': None,
-        'masked_pixel_data': None
-    }
-    log_progress(1, 4, "Load DICOM Data...")
-    dicom_data = get_dicom_data_list(working_dir)
-    if len(dicom_data) == 0:
-        return False, common_data
-    log_progress(2, 4, "Load Series Data...")
-    pixel_data = get_dicom_series(dicom_data, True)
-    log_progress(3, 4, "Load Body Mask Data(This task may take 3 minutes or more)...")
-    body_mask_data = get_body_mask_series_with_DBSCAN(dicom_data)
-    log_progress(4, 4, "Load Masked Pixel Data...")
-    masked_pixel_data = pixel_data * body_mask_data
-    common_data['dicom_data'] = dicom_data
-    common_data['pixel_data'] = pixel_data
-    common_data['body_mask_data'] = body_mask_data
-    common_data['masked_pixel_data'] = masked_pixel_data
-    pickle.dump(common_data, open(os.path.join(working_dir, 'common_data.pkl'), 'wb'))
-    return True, common_data
-
-@log_execution_time
-def predict(working_dir: str):
+        list: 원본 이미지 리스트
+        list: 추출된 근육 이미지 리스트
     """
-    CNN 모델을 통해 평가 방법을 정의하는 함수
-
-    Args:
-        working_dir (str): 작업 디렉터리 경로
-
-    Returns:
-        tuple: 예측된 클래스 리스트(predicted_class_zip), 확률 리스트(probabilities)
-    """
-    model = init_model(args.weight)
-    predicted_class_zip = []
-    probabilities = []
+    st = log_execution_time_with_dist("start", "extract_muscle")
+    checkpoint = f"checkpoint_extract_{category}_{sn}.pkl"
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    checkpoint_path = os.path.join(checkpoint_dir, checkpoint)
     
-    dicom_file_list = get_dicom_files(working_dir)
+    if check_checkpoint(checkpoint_path):
+        with open(checkpoint_path, "rb") as f:
+            return pickle.load(f)
 
-    for file_path in dicom_file_list:
-        log_progress(dicom_file_list.index(file_path) + 1, len(dicom_file_list), f"Predicting({file_path})...")
-        image = get_preprocessed_dicom_image(file_path)
+    original_image_list = []
+    extracted_muscle_image_list = []
+    metadata_list = []
+    working_file_num = len(working_list) - 1
+        
+    boundary = calc_boundary(working_list)
+    
+    param_list = []
+    for idx, working_file in enumerate(working_list):
+        method = pred_list[idx]
+        param_list.append((idx, working_file, method, working_file_num, category, sn, boundary, visualize_dir))
 
-        with torch.no_grad():
-            output = model(image)
-            probability = output.item()
-            predicted_class = 1 if probability > 0.5 else 0
+    with multiprocessing.Pool(processes=batch_size) as pool:
+        for i, (working_file, original_image, extracted_muscle_image, metadata) in enumerate(pool.imap(extract_helper, param_list)):
+            log_progress(i + 1, len(working_list), f"Extracting Muscle ({working_file})")
+            original_image_list.append(original_image)
+            extracted_muscle_image_list.append(extracted_muscle_image)
+            metadata_list.append(metadata)
 
-        predicted_class_zip.append(predicted_class)
-        probabilities.append(probability)
+    with open(checkpoint_path, "wb") as f:
+        pickle.dump([original_image_list, extracted_muscle_image_list, metadata_list], f)
+        
+    log_execution_time_with_dist("end", "extract_muscle", st)
+    return original_image_list, extracted_muscle_image_list, metadata_list
 
-    return predicted_class_zip
-
-@log_execution_time
-def filtering(predicted_class_zip: list, convex_list: list, masking_list: list):
-    """
-    퍙기 빙밥에 따라 Convex와 Masking 정보를 필터링하는 함수
-
-    Args:
-        predicted_class_zip (list): 예측된 클래스 리스트
-        convex_list (list): Convex 정보 리스트
-        masking_list (list): Masking 정보 리스트
-
-    Returns:
-        tuple: 필터링된 Convex 정보 리스트(filtered_convex_info), 필터링된 Masking 정보 리스트(filtered_masking_info)
-    """
-    filtered_convex_info = []
-    filtered_masking_info = []
-
-    for idx, predicted_class in enumerate(predicted_class_zip):
-        if predicted_class == 0:
-            if idx < len(convex_list):
-                convex_info = convex_list[idx]
-                filtered_convex_info.append(convex_info)
-        elif predicted_class == 1:
-            if idx < len(masking_list):
-                masking_info = masking_list[idx]
-                filtered_masking_info.append(masking_info)
-
-    return filtered_convex_info, filtered_masking_info
-
-def main(args: ArgumentParser):
+def main():
     """
     메인 함수
 
@@ -137,56 +108,66 @@ def main(args: ArgumentParser):
     Returns:
         None
     """
-    working_dir = classify(args.patient_id, args.input_dir, args.working_dir)
-    metadata = preprocess(working_dir)
-    for folder_type in ['in', 'ex']:
-        flag, common_data = load_common_data(metadata[folder_type]['working_dir'])
-        if flag:
-            plot_convex = convex(metadata[folder_type]['working_dir'], metadata[folder_type]['lungmask_path'], common_data)
-            plot_masking = masking(metadata[folder_type]['working_dir'], common_data)
+    console = Console()
+    console = console.__class__(log_time=False)
+    console_banner(console)
+    
+    args = init_args(console)
+    if args.data_dir != 'data':
+        args.input_dir = os.path.join(args.data_dir, 'input')
+        args.output_dir = os.path.join(args.data_dir, 'output')
+        args.working_dir = os.path.join(args.data_dir, 'working')
+        args.label_dir = os.path.join(args.data_dir, 'label')
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model, transform = init_model(args.weight, device)
 
-            masking_list = [(i, mask) for i, mask in enumerate(plot_masking)]
-            convex_list = [(i, convex) for i, convex in enumerate(plot_convex)]
-
-            predicted_class_zip = predict(metadata[folder_type]['working_dir'])
-            filtered_convex_info, filtered_masking_info = filtering(predicted_class_zip, convex_list, masking_list)
-            sorted_combined_images_with_index = convert_image(filtered_convex_info, filtered_masking_info)
+    classified_list = classify(args.patient_id, args.input_dir, args.working_dir, args.output_dir, console)
+    for cur_sub_input_dir, working_dir, output_dir, classify_dict, slide_location_dict, size in classified_list:
+        date = working_dir.split('/')[-2]
+        log("info",  f"Processing Patient ID: {args.patient_id}, Date: {date}", upper_div=True, space=True)
+        label_dir = os.path.join(args.label_dir, args.patient_id)
+        # output_dir = os.path.join(args.output_dir, args.patient_id)
+        checkpoint_dir = os.path.join(working_dir, 'checkpoint')
+        visualize_dir = os.path.join(working_dir, 'visualize')
+        muscle_dir = os.path.join(output_dir, 'muscle')
+        abs_dir = os.path.join(output_dir, 'abs')
+        overlap_dir = os.path.join(output_dir, 'overlap')
+        
+        original_image_dict = {"in": {}, "ex": {}}
+        extracted_muscle_image_dict = {"in": {}, "ex": {}}
+        metadata_dict = {"in": {}, "ex": {}}
+        
+        for category in ["in", "ex"]:
+            sn_list = classify_dict[category].keys()
+            for sn in sn_list:
+                working_list = classify_dict[category][sn]
+                pred_list = predict(model, transform, device, checkpoint_dir, working_list, category, sn)
+                if pred_list is not None and pred_list[0] == 'lower' and pred_list[-1] == 'upper':
+                    working_list.sort(reverse=True)
+                    pred_list.sort(reverse=True)
+                original_image_list, extracted_muscle_image_list, metadata_list = extract_muscle(working_list, pred_list, category, sn, checkpoint_dir, visualize_dir, batch_size = args.batch_size)
+                original_image_dict[category][sn] = original_image_list
+                extracted_muscle_image_dict[category][sn] = extracted_muscle_image_list
+                metadata_dict[category][sn] = metadata_list
             
-            is_inside_dict = {}
-            y_min_dict = {}
+        metadata_path = os.path.join(working_dir, 'metadata.json')
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata_dict, f, indent=4)
             
-            colored_image_list = []
-
-            for index, image in sorted_combined_images_with_index:
-                log_progress(index, len(sorted_combined_images_with_index), f"Processing Image({index})...")
-                hu_image, _ = process_image(image)
-                points = extract_points_in_hu_range(hu_image, lower_bound=300, upper_bound=1900)
-                labels = cluster_points(points)
-
-                x_mid, y_min = find_x_mid_and_y_min(hu_image)
-                is_inside = check_clusters_intersect_with_rectangle(hu_image, hu_image, x_mid, y_min)
-                cluster_labels = cluster_points(points)
-                cluster_y_min = find_cluster_y_min(points, cluster_labels)
-                is_inside_dict, y_min_dict = store_is_inside_and_y_min(index, is_inside_dict, y_min_dict, is_inside, cluster_y_min)
-                
-                colored_image = image_process_pipeline(hu_image, points, labels, is_inside, index, y_min_dict)
-
-                if image.shape[-1] == 4:
-                    image = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
-                if len(image.shape) == 2:
-                    image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
-
-                overlay_image = cv2.addWeighted(image, 0.5, colored_image, 0.5, 0)
-                colored_image_list.append((index, overlay_image))
-
-                output_dir = os.path.join(args.output_dir, args.patient_id, folder_type)
-                save_overlay_image(overlay_image, index, output_dir)
-                pickle.dump(colored_image_list, open(os.path.join(output_dir, 'colored_image_list.pkl'), 'wb'))
-                
-    result_dir = os.path.join(args.output_dir, args.patient_id)
-    log("success", f"Process Finished! Check the result in {result_dir}")
+        post_processed_muscle_image_dict = post_processing(extracted_muscle_image_dict, metadata_dict)
+        
+        counting(post_processed_muscle_image_dict, slide_location_dict, cur_sub_input_dir, output_dir, args.output_dir, size, args.visualize)
+        if args.overlap:
+            overlap(original_image_dict, post_processed_muscle_image_dict, muscle_dir, abs_dir, overlap_dir)
+        if args.calculate:
+            label_muscle_image_dict, label_flag = load_label(checkpoint_dir, label_dir)
+            if label_flag:
+                calculate(post_processed_muscle_image_dict, label_muscle_image_dict, output_dir)
+                visualize(output_dir, (0, 1))
+        else:
+            log("dimmed", "Skip Analysis")
+    log("success",  f"Processing Finished")
 
 if __name__ == '__main__':
-    args = init_args()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    main(args)
+    main()

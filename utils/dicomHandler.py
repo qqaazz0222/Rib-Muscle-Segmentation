@@ -19,10 +19,11 @@ def get_dicom_files(dir: str):
         list: DICOM 파일 경로 리스트
     """
     files = os.listdir(dir)
-    if len(files) == 0:
-        return []
-    else:
-        return [os.path.join(dir, file) for file in files if file.endswith('.dcm')]
+    file_list = []
+    if len(files) > 0:
+        file_list = [os.path.join(dir, file) for file in files if file.endswith('.dcm')]
+    file_list.sort()
+    return file_list
 
 def get_dicom_data(file_path: str):
     """
@@ -88,6 +89,22 @@ def get_body_mask_series_with_DBSCAN(data_list: list):
         pixel_array_list[:, :, i] = get_body_mask_with_DBSAN(d, from_DICOM_data = True)
 
     return pixel_array_list
+
+def get_dicom_idx(file: str):
+    """
+    DICOM 파일의 인덱스를 반환하는 함수
+
+    Args:
+        file (str): DICOM 파일 경로
+
+    Returns:
+        int: DICOM 파일 인덱스
+    """
+    data = get_dicom_data(file) 
+    idx_data = data.get((0x0020, 0x0013), "Unknown")
+    idx = idx_data.value
+    return file, idx
+    
 
 def get_pixels(target, adjusted: bool = False, from_DICOM_data: bool = False,):
     """
@@ -233,9 +250,9 @@ def get_body_mask_with_DBSAN(target, from_DICOM_data: bool = False):
 
     return cvxHull
 
-def get_preprocessed_dicom_image(path: str):
+def convert_dicom_to_tensor(path: str):
     """
-    DICOM 이미지를 전처리하여 반환하는 함수
+    DICOM 파일을 Tensor로 변환하는 함수
 
     Args:
         path (str): DICOM 파일 경로
@@ -245,6 +262,7 @@ def get_preprocessed_dicom_image(path: str):
     """
     dcm = pydicom.dcmread(path)
     img = dcm.pixel_array
+    weight = np.sum(img < 200) / img.size
     img = np.stack([img] * 3, axis=-1)
     img = (img / np.max(img) * 255).astype(np.uint8)
     img = Image.fromarray(img)
@@ -253,4 +271,4 @@ def get_preprocessed_dicom_image(path: str):
             transforms.ToTensor(),
             transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
         ])
-    return transform(img).unsqueeze(0)
+    return transform(img).unsqueeze(0), weight
